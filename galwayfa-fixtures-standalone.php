@@ -228,13 +228,14 @@ function post_to_wordpress($html, $site_url, $username, $app_password, $page_id)
 
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $endpoint);
-    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
+    curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 20);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Basic ' . $credentials,
         'Content-Type: application/json',
+        'Content-Length: ' . strlen($payload),
     ]);
 
     $response = curl_exec($ch);
