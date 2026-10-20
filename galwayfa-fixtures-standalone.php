@@ -221,7 +221,7 @@ function fetch_galway_fixtures() {
  * Updates a WordPress page with the given HTML content via the REST API.
  */
 function post_to_wordpress($html, $site_url, $username, $app_password, $page_id) {
-    $endpoint = rtrim($site_url, '/') . '/wp-json/wp/v2/pages/' . intval($page_id);
+    $endpoint = rtrim($site_url, '/') . '/wp-json/wp/v2/posts/' . intval($page_id);
     $credentials = base64_encode($username . ':' . $app_password);
 
     $payload = json_encode(['content' => $html]);
