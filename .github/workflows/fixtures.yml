@@ -26,4 +26,5 @@ jobs:
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           WP_PAGE_ID: ${{ secrets.WP_PAGE_ID }}
+          FAICONNECT_API_KEY: ${{ secrets.FAICONNECT_API_KEY }}
         run: php galwayfa-fixtures-standalone.php

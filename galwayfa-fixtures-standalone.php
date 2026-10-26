@@ -1,8 +1,12 @@
 <?php
 /**
- * Standalone Galway FA Fixtures Fetcher
- * Fetches home fixtures from the Galway FA AJAX endpoint and outputs them.
+ * Standalone Fixtures Fetcher
+ * Fetches home fixtures from the Galway FA AJAX endpoint and the FAI Connect report API,
+ * merges them, and outputs them.
  */
+
+// Kick-off times from both sources are Irish local time.
+date_default_timezone_set('Europe/Dublin');
 
 // Configuration
 define('GFA_FIXTURE_API_URL', 'https://galwayfa.ie/wp-admin/admin-ajax.php');
@@ -10,10 +14,14 @@ define('GFA_API_ACTION', 'fixtures');
 define('GFA_CLUB_ID', '2786');
 define('GFA_CLUB_NAME_BASE', 'Salthill Devon');
 
+// FAI Connect saved "Matches" report (COMET Data). The API key comes from the FAICONNECT_API_KEY env var.
+// 1000 is the maximum page size the API allows.
+define('FAICONNECT_API_URL', 'https://faiconnect.ie/data-backend/api/public/areports/run/0/1000/');
+
 /**
- * Fetches fixtures from Galway FA and filters for home games in the next 7 days.
+ * Fetches fixtures from Galway FA and filters for home games inside the window.
  */
-function fetch_galway_fixtures() {
+function fetch_galway_fixtures($today_start, $window_end) {
     // 1. Prepare API Request Parameters
     $request_params = array(
         'action' => GFA_API_ACTION,
@@ -45,13 +53,13 @@ function fetch_galway_fixtures() {
 
     // 3. Error Handling for API Request
     if ($error || $http_code !== 200) {
-        echo "Error: API request failed. HTTP Code: {$http_code}. Error: {$error}\n";
-        return;
+        echo "Error: Galway FA API request failed. HTTP Code: {$http_code}. Error: {$error}\n";
+        return array();
     }
 
     if (empty($body)) {
-        echo "Error: Received empty response body.\n";
-        return;
+        echo "Error: Galway FA returned an empty response body.\n";
+        return array();
     }
 
     // 4. Parse the API Response (HTML)
@@ -64,14 +72,12 @@ function fetch_galway_fixtures() {
     $fixture_nodes = $xpath->query('//*[@data-hometeam]');
 
     if (!$fixture_nodes || $fixture_nodes->length === 0) {
-        echo "Error: Could not find any fixtures with 'data-hometeam' attribute.\n";
-        return;
+        echo "Error: Could not find any Galway FA fixtures with 'data-hometeam' attribute.\n";
+        return array();
     }
 
     // 5. Process and Filter Fixtures
     $fixtures_found = [];
-    $today_start = strtotime('today'); // Start of today (00:00:00)
-    $one_week_from_today = strtotime('+7 days', $today_start);
     $base_club_name_lower = strtolower(GFA_CLUB_NAME_BASE);
 
     foreach ($fixture_nodes as $fixture_node) {
@@ -84,8 +90,8 @@ function fetch_galway_fixtures() {
 
         $fixture_timestamp = strtotime($date_str . ' ' . $time);
 
-        // Filter 1: Only check fixtures from today through the next 7 days
-        if (!$fixture_timestamp || $fixture_timestamp < $today_start || $fixture_timestamp > $one_week_from_today) {
+        // Filter 1: Only check fixtures from today through the end of the window
+        if (!$fixture_timestamp || $fixture_timestamp < $today_start || $fixture_timestamp > $window_end) {
             continue;
         }
 
@@ -104,6 +110,104 @@ function fetch_galway_fixtures() {
             'timestamp' => $fixture_timestamp
         );
     }
+
+    return $fixtures_found;
+}
+
+/**
+ * Fetches fixtures from the FAI Connect "Matches" report and filters for home games inside the window.
+ * Skipped (with a message) when FAICONNECT_API_KEY is not set, so the Galway FA fixtures still publish.
+ */
+function fetch_faiconnect_fixtures($today_start, $window_end) {
+    $api_key = getenv('FAICONNECT_API_KEY');
+    if (!$api_key) {
+        echo "FAICONNECT_API_KEY not set, skipping FAI Connect.\n";
+        return array();
+    }
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, FAICONNECT_API_URL);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'sdfc-fixtures-bot/1.0 (+https://github.com/conorkelly86/sdfc-fixtures)');
+    curl_setopt($ch, CURLOPT_HTTPHEADER, array('API_KEY: ' . $api_key, 'Accept: application/json'));
+
+    $body = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error = curl_error($ch);
+    curl_close($ch);
+
+    $data = json_decode((string) $body, true);
+    if ($error || $http_code !== 200 || !is_array($data) || !isset($data['results'])) {
+        echo "Error: FAI Connect API request failed. HTTP Code: {$http_code}. Error: {$error}\n";
+        return array();
+    }
+
+    if (!empty($data['lastPage'])) {
+        echo "Warning: FAI Connect report has more than one page; only the first 1000 rows were read.\n";
+    }
+
+    $fixtures_found = array();
+    foreach ($data['results'] as $row) {
+        $fixture = parse_faiconnect_home_fixture($row);
+        if ($fixture && $fixture['timestamp'] >= $today_start && $fixture['timestamp'] <= $window_end) {
+            $fixtures_found[] = $fixture;
+        }
+    }
+
+    return $fixtures_found;
+}
+
+/**
+ * Converts one FAI Connect report row into a fixture, or null if it is not a dated home game.
+ * Team names are only available inside "Home - Away score", and some contain " - " themselves
+ * (e.g. "Tuam Celtic - Reserves"), so only home games are parsed: the home name is everything
+ * before the first " - ", which Salthill Devon team names never contain.
+ */
+function parse_faiconnect_home_fixture($row) {
+    // ENTERED matches have no date yet; postponed/played ones are not upcoming fixtures.
+    if (($row['matchStatus'] ?? '') !== 'SCHEDULED' || empty($row['matchDate'])) {
+        return null;
+    }
+
+    $description = trim($row['matchDescription'] ?? '');
+    if (!str_starts_with(strtolower($description), strtolower(GFA_CLUB_NAME_BASE))) {
+        return null;
+    }
+
+    $teams = explode(' - ', preg_replace('/\s+(\d+:\d+|-:-)\s*$/', '', $description), 2);
+    if (count($teams) !== 2) {
+        return null;
+    }
+
+    // matchDate is epoch milliseconds (UTC); the script timezone renders it as Irish local time.
+    $timestamp = intdiv((int) $row['matchDate'], 1000);
+
+    return array(
+        'home_team' => trim($teams[0]),
+        'away_team' => trim($teams[1]),
+        'date' => date('D, M j, Y', $timestamp),
+        'time' => date('H:i', $timestamp),
+        'competition' => trim($row['name'] ?? 'Competition Missing'),
+        'timestamp' => $timestamp,
+    );
+}
+
+/**
+ * Collects fixtures from every source for the coming week, builds the page HTML and publishes it.
+ */
+function update_fixtures() {
+    $today_start = strtotime('today'); // Start of today (00:00:00)
+    $window_days = (int) (getenv('FIXTURES_DAYS') ?: 7);
+    $window_end = strtotime("+{$window_days} days", $today_start);
+
+    $faiconnect = fetch_faiconnect_fixtures($today_start, $window_end);
+    $galway = fetch_galway_fixtures($today_start, $window_end);
+    echo 'FAI Connect fixtures: ' . count($faiconnect) . ', Galway FA fixtures: ' . count($galway) . "\n";
+
+    // The sources do not overlap: Galway FA lists the age-grade competitions, FAI Connect the adult
+    // men's leagues. Team names differ between them, so matches could not be de-duplicated by name anyway.
+    $fixtures_found = array_merge($faiconnect, $galway);
 
     // 7. Output Results as HTML to file (WordPress format)
     $html_output = '';
@@ -282,5 +386,5 @@ function verify_wordpress_saved($response, $html, $page_id, $http_code) {
 }
 
 // Run the script
-fetch_galway_fixtures();
+update_fixtures();
 ?>
