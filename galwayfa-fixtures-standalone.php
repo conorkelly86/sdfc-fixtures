@@ -19,9 +19,10 @@ define('GFA_CLUB_NAME_BASE', 'Salthill Devon');
 define('FAICONNECT_API_URL', 'https://faiconnect.ie/data-backend/api/public/areports/run/0/1000/');
 
 /**
- * Fetches fixtures from Galway FA and filters for home games inside the window.
+ * Fetches fixtures from Galway FA and filters for games (home or away) inside the window.
+ * $is_home: true for home games (team is home_team), false for away games (team is away_team).
  */
-function fetch_galway_fixtures($today_start, $window_end) {
+function fetch_galway_fixtures($today_start, $window_end, $is_home = true) {
     // 1. Prepare API Request Parameters
     $request_params = array(
         'action' => GFA_API_ACTION,
@@ -95,9 +96,15 @@ function fetch_galway_fixtures($today_start, $window_end) {
             continue;
         }
 
-        // Filter 2: Only Home Games (using partial match)
-        if (!str_starts_with(strtolower($home_team), $base_club_name_lower)) {
-            continue;
+        // Filter 2: Only games where the club is in the position requested
+        if ($is_home) {
+            if (!str_starts_with(strtolower($home_team), $base_club_name_lower)) {
+                continue;
+            }
+        } else {
+            if (!str_starts_with(strtolower($away_team), $base_club_name_lower)) {
+                continue;
+            }
         }
 
         // 6. Collect Fixture Data
@@ -115,10 +122,11 @@ function fetch_galway_fixtures($today_start, $window_end) {
 }
 
 /**
- * Fetches fixtures from the FAI Connect "Matches" report and filters for home games inside the window.
+ * Fetches fixtures from the FAI Connect "Matches" report and filters for games (home or away) inside the window.
+ * $is_home: true for home games, false for away games.
  * Skipped (with a message) when FAICONNECT_API_KEY is not set, so the Galway FA fixtures still publish.
  */
-function fetch_faiconnect_fixtures($today_start, $window_end) {
+function fetch_faiconnect_fixtures($today_start, $window_end, $is_home = true) {
     $api_key = getenv('FAICONNECT_API_KEY');
     if (!$api_key) {
         echo "FAICONNECT_API_KEY not set, skipping FAI Connect.\n";
@@ -149,7 +157,7 @@ function fetch_faiconnect_fixtures($today_start, $window_end) {
 
     $fixtures_found = array();
     foreach ($data['results'] as $row) {
-        $fixture = parse_faiconnect_home_fixture($row);
+        $fixture = parse_faiconnect_fixture($row, $is_home);
         if ($fixture && $fixture['timestamp'] >= $today_start && $fixture['timestamp'] <= $window_end) {
             $fixtures_found[] = $fixture;
         }
@@ -159,38 +167,148 @@ function fetch_faiconnect_fixtures($today_start, $window_end) {
 }
 
 /**
- * Converts one FAI Connect report row into a fixture, or null if it is not a dated home game.
+ * Converts one FAI Connect report row into a fixture, or null if it doesn't match the requested role.
  * Team names are only available inside "Home - Away score", and some contain " - " themselves
- * (e.g. "Tuam Celtic - Reserves"), so only home games are parsed: the home name is everything
- * before the first " - ", which Salthill Devon team names never contain.
+ * (e.g. "Tuam Celtic - Reserves"), so the home name is everything before the first " - ",
+ * which Salthill Devon team names never contain.
+ * $is_home: true to match if Salthill is home team, false if away team.
  */
-function parse_faiconnect_home_fixture($row) {
+function parse_faiconnect_fixture($row, $is_home = true) {
     // ENTERED matches have no date yet; postponed/played ones are not upcoming fixtures.
     if (($row['matchStatus'] ?? '') !== 'SCHEDULED' || empty($row['matchDate'])) {
         return null;
     }
 
     $description = trim($row['matchDescription'] ?? '');
-    if (!str_starts_with(strtolower($description), strtolower(GFA_CLUB_NAME_BASE))) {
-        return null;
-    }
-
     $teams = explode(' - ', preg_replace('/\s+(\d+:\d+|-:-)\s*$/', '', $description), 2);
     if (count($teams) !== 2) {
         return null;
+    }
+
+    $home = trim($teams[0]);
+    $away = trim($teams[1]);
+    $base_lower = strtolower(GFA_CLUB_NAME_BASE);
+
+    // Check if Salthill is in the requested role
+    if ($is_home) {
+        if (!str_starts_with(strtolower($home), $base_lower)) {
+            return null;
+        }
+    } else {
+        if (!str_starts_with(strtolower($away), $base_lower)) {
+            return null;
+        }
     }
 
     // matchDate is epoch milliseconds (UTC); the script timezone renders it as Irish local time.
     $timestamp = intdiv((int) $row['matchDate'], 1000);
 
     return array(
-        'home_team' => trim($teams[0]),
-        'away_team' => trim($teams[1]),
+        'home_team' => $home,
+        'away_team' => $away,
         'date' => date('D, M j, Y', $timestamp),
         'time' => date('H:i', $timestamp),
         'competition' => trim($row['name'] ?? 'Competition Missing'),
         'timestamp' => $timestamp,
     );
+}
+
+/**
+ * Returns the page stylesheet as a single line.
+ * WordPress turns blank lines in post content into stray </p><p> tags, even inside <style>, which
+ * breaks the CSS. Keep the page HTML free of blank lines and keep these rules on one line.
+ *
+ * The theme styles h1/h2/p/header globally and puts post content in a flex column that grows to fit
+ * its widest child, so every rule is scoped under .sdfc-fx and the phone layout drops the table.
+ */
+function fixtures_css() {
+    $styles = array(
+        '.team-banner--sec{display:none}',
+        'header{position:relative!important}',
+        'div>header{position:relative!important;transform:none!important;top:auto!important;z-index:auto!important}',
+        '.sdfc-fx{font-family:"Segoe UI",Tahoma,Geneva,Verdana,sans-serif;width:100%;max-width:100%;margin:0;background:#fff}',
+        '.sdfc-fx,.sdfc-fx *{box-sizing:border-box}',
+        '.sdfc-fx header.sdfc-fx-head{background:#004d99;color:#fff;padding:25px 30px;text-align:center}',
+        '.sdfc-fx .sdfc-fx-title{margin:0;color:#fff;font-size:2.2em;letter-spacing:1px;overflow-wrap:anywhere}',
+        '.sdfc-fx .sdfc-fx-sub{margin:5px 0 0;color:#fff;opacity:.9;font-size:1.1em}',
+        '.sdfc-fx .sdfc-fx-main{padding:20px 30px}',
+        '.sdfc-fx-tabs{display:flex;border-bottom:2px solid #eee;margin:0 0 20px 0;gap:0}',
+        '.sdfc-fx-tab-label{padding:12px 20px;cursor:pointer;color:#666;font-weight:500;border:none;background:none;border-bottom:3px solid transparent;transition:color 0.2s,border-color 0.2s}',
+        '.sdfc-fx-tab-label.active{color:#004d99;border-bottom-color:#004d99}',
+        '.sdfc-fx-tab-content{display:none}',
+        '.sdfc-fx-tab-content.active{display:block}',
+        '.sdfc-fx .sdfc-fx-day{margin:30px 0 20px;padding-bottom:5px;border-bottom:2px solid #ffcc00;color:#004d99;font-size:1.5em}',
+        '.sdfc-fx .sdfc-fx-table{width:100%;border-collapse:collapse;margin-bottom:25px}',
+        '.sdfc-fx .sdfc-fx-table th{background:#f4f4f4;color:#333}',
+        '.sdfc-fx .sdfc-fx-table th,.sdfc-fx .sdfc-fx-table td{padding:12px;text-align:left;overflow-wrap:anywhere}',
+        '.sdfc-fx .sdfc-fx-table td{border-bottom:1px solid #eee}',
+        '.sdfc-fx .sdfc-fx-table tbody tr:nth-child(even) td{background:#fafafa}',
+        '.sdfc-fx .sdfc-fx-table tbody tr:last-child td{border-bottom:2px solid #004d99}',
+        '.sdfc-fx .sdfc-fx-table th.sdfc-fx-time{width:15%}',
+        '.sdfc-fx .sdfc-fx-table th.sdfc-fx-match{width:45%}',
+        '.sdfc-fx .sdfc-fx-table th.sdfc-fx-comp{width:40%}',
+        '.sdfc-fx .sdfc-fx-table td.sdfc-fx-time{font-weight:bold;color:#cc0000}',
+        '.sdfc-fx .sdfc-fx-match strong{color:#42bcd9}',
+        '.sdfc-fx footer.sdfc-fx-foot{background:#f4f4f4;padding:15px 30px;text-align:center}',
+        '.sdfc-fx .sdfc-fx-note{margin:0;color:#777;font-style:italic;font-size:.9em}',
+        '@media (max-width:600px){.sdfc-fx header.sdfc-fx-head{padding:18px 14px}.sdfc-fx .sdfc-fx-title{font-size:1.45em;line-height:1.2;letter-spacing:.5px}.sdfc-fx .sdfc-fx-sub{font-size:.95em}.sdfc-fx .sdfc-fx-main{padding:14px 12px}.sdfc-fx-tabs{margin:0 -12px 20px -12px;padding:0 12px}.sdfc-fx-tab-label{padding:10px 16px;font-size:.95em}.sdfc-fx .sdfc-fx-day{margin:24px 0 12px;font-size:1.2em}.sdfc-fx .sdfc-fx-table,.sdfc-fx .sdfc-fx-table tbody,.sdfc-fx .sdfc-fx-table tr,.sdfc-fx .sdfc-fx-table td{display:block;width:100%}.sdfc-fx .sdfc-fx-table thead{display:none}.sdfc-fx .sdfc-fx-table tr{padding:10px 12px;border-bottom:1px solid #eee}.sdfc-fx .sdfc-fx-table tbody tr:nth-child(even){background:#fafafa}.sdfc-fx .sdfc-fx-table tbody tr:last-child{border-bottom:2px solid #004d99}.sdfc-fx .sdfc-fx-table tbody tr:nth-child(n) td{padding:2px 0;border:0;background:none}.sdfc-fx .sdfc-fx-table td.sdfc-fx-time{font-size:1.05em}.sdfc-fx .sdfc-fx-table td.sdfc-fx-comp{color:#555;font-style:italic;font-size:.9em}.sdfc-fx footer.sdfc-fx-foot{padding:12px}}',
+    );
+    return '<style>' . implode('', $styles) . '</style><script>document.addEventListener("DOMContentLoaded",function(){var labels=document.querySelectorAll(".sdfc-fx-tab-label"),contents=document.querySelectorAll(".sdfc-fx-tab-content");labels.forEach(function(label){label.addEventListener("click",function(){labels.forEach(function(l){l.classList.remove("active")});contents.forEach(function(c){c.classList.remove("active")});label.classList.add("active");var tab=label.getAttribute("data-tab");var content=document.querySelector(".sdfc-fx-tab-content[data-tab=\'"+tab+"\']");if(content)content.classList.add("active")})});if(labels.length>0)labels[0].classList.add("active");if(contents.length>0)contents[0].classList.add("active")});</script>';
+}
+
+/**
+ * Renders one day's heading and fixtures table. No blank lines (see fixtures_css()).
+ */
+function render_fixtures_day($date, $day_fixtures) {
+    $html = "<h2 class=\"sdfc-fx-day\">{$date}</h2><table class=\"sdfc-fx-table\"><thead><tr><th class=\"sdfc-fx-time\">Kick-off</th><th class=\"sdfc-fx-match\">Match</th><th class=\"sdfc-fx-comp\">Competition</th></tr></thead><tbody>";
+    foreach ($day_fixtures as $fixture) {
+        $time_12hr = date('g:i a', $fixture['timestamp']);
+        $html .= "<tr><td class=\"sdfc-fx-time\">{$time_12hr}</td><td class=\"sdfc-fx-match\"><strong>{$fixture['home_team']}</strong> vs {$fixture['away_team']}</td><td class=\"sdfc-fx-comp\">{$fixture['competition']}</td></tr>";
+    }
+    return $html . "</tbody></table>";
+}
+
+/**
+ * Builds the page HTML (WordPress format) for home and away fixtures. No blank lines (see fixtures_css()).
+ */
+function build_fixtures_html($fixtures_home, $fixtures_away) {
+    $all_fixtures = array_merge($fixtures_home, $fixtures_away);
+    if (empty($all_fixtures)) {
+        return "<p style=\"text-align: center; margin: 10px 0 30px; font-size: 1.1em;\">No fixtures scheduled for the next 7 days.</p>\n";
+    }
+    usort($all_fixtures, function($a, $b) {
+        return $a['timestamp'] - $b['timestamp'];
+    });
+    $first_date = date('M j', $all_fixtures[0]['timestamp']);
+    $last_date = date('M j, Y', $all_fixtures[count($all_fixtures) - 1]['timestamp']);
+    $html = fixtures_css();
+    $html .= "<div class=\"sdfc-fx\"><header class=\"sdfc-fx-head\"><h1 class=\"sdfc-fx-title\">Salthill Devon Fixtures</h1><p class=\"sdfc-fx-sub\">NFP Park, Drom | This Week: {$first_date} - {$last_date} ⚽</p></header><main class=\"sdfc-fx-main\"><div class=\"sdfc-fx-tabs\"><label class=\"sdfc-fx-tab-label\" data-tab=\"home\">Home</label><label class=\"sdfc-fx-tab-label\" data-tab=\"away\">Away</label></div>";
+    $html .= render_fixtures_tab('home', $fixtures_home);
+    $html .= render_fixtures_tab('away', $fixtures_away);
+    $html .= "</main><footer class=\"sdfc-fx-foot\"><p class=\"sdfc-fx-note\">⚠️ Please note: Kick-off times and dates are subject to change. Always check the official Galway FA website.</p></footer></div>";
+    return $html;
+}
+
+/**
+ * Renders a tab's fixtures content. Called for both 'home' and 'away' tabs.
+ */
+function render_fixtures_tab($tab_id, $fixtures) {
+    if (empty($fixtures)) {
+        return "<div class=\"sdfc-fx-tab-content\" data-tab=\"{$tab_id}\"><p style=\"text-align:center;margin:20px 0;color:#666;\">No " . ($tab_id === 'home' ? 'home' : 'away') . " fixtures scheduled for this week.</p></div>";
+    }
+    usort($fixtures, function($a, $b) {
+        return $a['timestamp'] - $b['timestamp'];
+    });
+    $html = "<div class=\"sdfc-fx-tab-content\" data-tab=\"{$tab_id}\">";
+    $fixtures_by_date = [];
+    foreach ($fixtures as $fixture) {
+        $fixtures_by_date[date('l, F j, Y', $fixture['timestamp'])][] = $fixture;
+    }
+    foreach ($fixtures_by_date as $date => $day_fixtures) {
+        $html .= render_fixtures_day($date, $day_fixtures);
+    }
+    $html .= "</div>";
+    return $html;
 }
 
 /**
@@ -201,112 +319,28 @@ function update_fixtures() {
     $window_days = (int) (getenv('FIXTURES_DAYS') ?: 7);
     $window_end = strtotime("+{$window_days} days", $today_start);
 
-    $faiconnect = fetch_faiconnect_fixtures($today_start, $window_end);
-    $galway = fetch_galway_fixtures($today_start, $window_end);
-    echo 'FAI Connect fixtures: ' . count($faiconnect) . ', Galway FA fixtures: ' . count($galway) . "\n";
+    // Fetch both home and away fixtures
+    $faiconnect_home = fetch_faiconnect_fixtures($today_start, $window_end, true);
+    $faiconnect_away = fetch_faiconnect_fixtures($today_start, $window_end, false);
+    $galway_home = fetch_galway_fixtures($today_start, $window_end, true);
+    $galway_away = fetch_galway_fixtures($today_start, $window_end, false);
+
+    echo 'Home: FAI Connect ' . count($faiconnect_home) . ', Galway FA ' . count($galway_home) . '; ';
+    echo 'Away: FAI Connect ' . count($faiconnect_away) . ', Galway FA ' . count($galway_away) . "\n";
 
     // The sources do not overlap: Galway FA lists the age-grade competitions, FAI Connect the adult
     // men's leagues. Team names differ between them, so matches could not be de-duplicated by name anyway.
-    $fixtures_found = array_merge($faiconnect, $galway);
+    $fixtures_home = array_merge($faiconnect_home, $galway_home);
+    $fixtures_away = array_merge($faiconnect_away, $galway_away);
 
-    // 7. Output Results as HTML to file (WordPress format)
-    $html_output = '';
-
-    if (empty($fixtures_found)) {
-        $html_output .= "<p style=\"text-align: center; margin: 10px 0 30px; font-size: 1.1em;\">No home fixtures scheduled for the next 7 days at NFP Park, Drom.</p>\n";
-    } else {
-        // Sort by timestamp
-        usort($fixtures_found, function($a, $b) {
-            return $a['timestamp'] - $b['timestamp'];
-        });
-
-        // Get date range for header
-        $first_date = date('M j', $fixtures_found[0]['timestamp']);
-        $last_date = date('M j, Y', $fixtures_found[count($fixtures_found) - 1]['timestamp']);
-
-        // Add header
-        $html_output .= "<style>.team-banner--sec {display: none;}  /* Prevent sticky header behavior */\n";
-        $html_output .= "  header {\n";
-        $html_output .= "    position: static !important;\n";
-        $html_output .= "    position: relative !important;\n";
-        $html_output .= "  }\n";
-        $html_output .= "  \n";
-        $html_output .= "  /* Target the specific header div if needed */\n";
-        $html_output .= "  div[style*=\"background-color: #004d99\"] header,\n";
-        $html_output .= "  div > header {\n";
-        $html_output .= "    position: static !important;\n";
-        $html_output .= "    position: relative !important;\n";
-        $html_output .= "    transform: none !important;\n";
-        $html_output .= "    top: auto !important;\n";
-        $html_output .= "    z-index: auto !important;\n";
-        $html_output .= "  }</style>\n";
-        $html_output .= "<div style=\"font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; width: 100%; margin: 0; background-color: #ffffff; border-radius: 0; box-shadow: none;\">\n\n";
-        $html_output .= "    <header style=\"background-color: #004d99; color: white; padding: 25px 30px; border-radius: 0; text-align: center;\">\n";
-        $html_output .= "        <h1 style=\"margin: 0; font-size: 2.2em; letter-spacing: 1px;\">Salthill Devon Home Fixtures</h1>\n";
-        $html_output .= "        <p style=\"margin: 5px 0 0; font-size: 1.1em; opacity: 0.9; color: white;\">NFP Park, Drom | This Week: {$first_date} - {$last_date} ⚽</p>\n";
-        $html_output .= "    </header>\n\n";
-        $html_output .= "    <main style=\"padding: 20px 30px;\">\n\n";
-        $html_output .= "        <p style=\"text-align: center; margin: 10px 0 30px; font-size: 1.1em;\">\n";
-        $html_output .= "            Come out and support Salthill Devon across all teams this week!\n";
-        $html_output .= "        </p>\n\n";
-
-        // Group fixtures by date
-        $fixtures_by_date = [];
-        foreach ($fixtures_found as $fixture) {
-            $date_key = date('l, F j, Y', $fixture['timestamp']);
-            if (!isset($fixtures_by_date[$date_key])) {
-                $fixtures_by_date[$date_key] = [];
-            }
-            $fixtures_by_date[$date_key][] = $fixture;
-        }
-
-        // Output each day's fixtures
-        foreach ($fixtures_by_date as $date => $day_fixtures) {
-            $html_output .= "        <h2 style=\"color: #004d99; border-bottom: 2px solid #ffcc00; padding-bottom: 5px; margin-top: 30px; font-size: 1.5em;\">\n";
-            $html_output .= "            {$date}\n";
-            $html_output .= "        </h2>\n\n";
-            $html_output .= "        <table style=\"width: 100%; border-collapse: collapse; margin-bottom: 25px;\">\n";
-            $html_output .= "            <thead>\n";
-            $html_output .= "                <tr style=\"background-color: #f4f4f4;\">\n";
-            $html_output .= "                    <th style=\"padding: 12px; text-align: left; width: 15%; color: #333;\">Kick-off</th>\n";
-            $html_output .= "                    <th style=\"padding: 12px; text-align: left; width: 45%; color: #333;\">Match</th>\n";
-            $html_output .= "                    <th style=\"padding: 12px; text-align: left; width: 40%; color: #333;\">Competition</th>\n";
-            $html_output .= "                </tr>\n";
-            $html_output .= "            </thead>\n";
-            $html_output .= "            <tbody>\n";
-
-            $fixture_count = count($day_fixtures);
-            foreach ($day_fixtures as $index => $fixture) {
-                $is_last = ($index === $fixture_count - 1);
-                $time_12hr = date('g:i a', $fixture['timestamp']);
-                $bg_style = ($index % 2 === 1) ? ' background-color: #fafafa;' : '';
-                $border_style = $is_last ? ' border-bottom: 2px solid #004d99;' : '';
-
-                $html_output .= "                <tr>\n";
-                $html_output .= "                    <td style=\"padding: 12px; border-bottom: 1px solid #eee;{$border_style} font-weight: bold; color: #cc0000;{$bg_style}\">{$time_12hr}</td>\n";
-                $html_output .= "                    <td style=\"padding: 12px; border-bottom: 1px solid #eee;{$border_style}{$bg_style}\"><strong style=\"color: #42bcd9;\">{$fixture['home_team']}</strong> vs {$fixture['away_team']}</td>\n";
-                $html_output .= "                    <td style=\"padding: 12px; border-bottom: 1px solid #eee;{$border_style}{$bg_style}\">{$fixture['competition']}</td>\n";
-                $html_output .= "                </tr>\n\n";
-            }
-
-            $html_output .= "            </tbody>\n";
-            $html_output .= "        </table>\n\n";
-        }
-
-        $html_output .= "    </main>\n\n";
-        $html_output .= "    <footer style=\"background-color: #f4f4f4; padding: 15px 30px; border-radius: 0; text-align: center;\">\n";
-        $html_output .= "        <p style=\"margin: 0; font-style: italic; color: #777; font-size: 0.9em;\">\n";
-        $html_output .= "            ⚠️ Please note: Kick-off times and dates are subject to change. Always check the official Galway FA website.\n";
-        $html_output .= "        </p>\n";
-        $html_output .= "    </footer>\n";
-        $html_output .= "</div>\n";
-    }
+    // 7. Build the page HTML
+    $html_output = build_fixtures_html($fixtures_home, $fixtures_away);
 
     // Write to file (always, for local review)
     $output_file = __DIR__ . '/fixtures-output.html';
     file_put_contents($output_file, $html_output);
     echo "HTML output written to: {$output_file}\n";
-    echo "Total fixtures found: " . count($fixtures_found) . "\n";
+    echo "Total fixtures found: " . (count($fixtures_home) + count($fixtures_away)) . "\n";
 
     // Post to WordPress if credentials are available in environment
     $wp_url      = getenv('WP_SITE_URL');
