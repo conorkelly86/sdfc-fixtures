@@ -2,8 +2,9 @@ name: Update Fixtures
 
 on:
   schedule:
-    # TEMPORARY TEST SCHEDULE - revert to '23 7 * * 1' (Mondays 07:23 UTC) after verifying
-    - cron: '47 11 * * *'
+    # Every Monday at 07:23 UTC (07:23 Irish winter time, 08:23 summer).
+    # NOTE: GitHub's scheduler is not firing on this repo. Use an external cron service or your Mac's cron as a workaround.
+    - cron: '23 7 * * 1'
   workflow_dispatch: # Allows manual trigger from GitHub UI
 
 jobs:
