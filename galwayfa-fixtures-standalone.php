@@ -127,12 +127,31 @@ function fetch_galway_fixtures($today_start, $window_end, $is_home = true) {
  * Skipped (with a message) when FAICONNECT_API_KEY is not set, so the Galway FA fixtures still publish.
  */
 function fetch_faiconnect_fixtures($today_start, $window_end, $is_home = true) {
-    $api_key = getenv('FAICONNECT_API_KEY');
-    if (!$api_key) {
+    // One saved report per competition group (GFA, FAI Cup, FAI National League), comma separated.
+    $api_keys = array_filter(array_map('trim', explode(',', (string) getenv('FAICONNECT_API_KEY'))));
+    if (!$api_keys) {
         echo "FAICONNECT_API_KEY not set, skipping FAI Connect.\n";
         return array();
     }
 
+    $fixtures_found = array();
+    foreach ($api_keys as $api_key) {
+        $fixtures_found = array_merge($fixtures_found, fetch_faiconnect_report($api_key, $today_start, $window_end, $is_home));
+    }
+
+    // Reports could overlap, so drop repeats of the same match.
+    $unique = array();
+    foreach ($fixtures_found as $fixture) {
+        $unique[$fixture['timestamp'] . '|' . $fixture['home_team'] . '|' . $fixture['away_team']] = $fixture;
+    }
+
+    return array_values($unique);
+}
+
+/**
+ * Reads one saved FAI Connect report and returns the matching fixtures in the window.
+ */
+function fetch_faiconnect_report($api_key, $today_start, $window_end, $is_home) {
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, FAICONNECT_API_URL);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
