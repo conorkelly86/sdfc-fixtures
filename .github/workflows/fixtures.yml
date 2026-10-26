@@ -2,9 +2,8 @@ name: Update Fixtures
 
 on:
   schedule:
-    # Every Monday at 07:23 UTC (07:23 Irish winter time, 08:23 summer).
-    # Off the top of the hour on purpose: :00 is when GitHub drops or delays scheduled runs.
-    - cron: '23 7 * * 1'
+    # TEMPORARY TEST SCHEDULE - revert to '23 7 * * 1' (Mondays 07:23 UTC) after verifying
+    - cron: '47 11 * * *'
   workflow_dispatch: # Allows manual trigger from GitHub UI
 
 jobs:
