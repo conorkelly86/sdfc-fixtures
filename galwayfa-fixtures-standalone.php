@@ -232,8 +232,10 @@ function post_to_wordpress($html, $site_url, $username, $app_password, $page_id)
     curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'sdfc-fixtures-bot/1.0 (+https://github.com/conorkelly86/sdfc-fixtures)');
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Basic ' . $credentials,
+        'Accept: application/json',
         'Content-Type: application/json',
         'Content-Length: ' . strlen($payload),
     ]);
@@ -275,7 +277,7 @@ function verify_wordpress_saved($response, $html, $page_id, $http_code) {
 
     echo "WordPress returned HTTP {$http_code} but the content was NOT saved as sent.\n";
     echo 'Response id: ' . ($body['id'] ?? 'none') . ', saved length: ' . ($saved === null ? 'none' : strlen($saved)) . ', sent length: ' . strlen($html) . "\n";
-    echo 'Response start: ' . substr((string) $response, 0, 300) . "\n";
+    echo 'Response start: ' . substr(trim(preg_replace('/\\s+/', ' ', strip_tags((string) $response))), 0, 600) . "\n";
     exit(1);
 }
 
