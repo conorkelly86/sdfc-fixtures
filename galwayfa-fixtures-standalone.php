@@ -193,8 +193,10 @@ function fetch_faiconnect_report($api_key, $today_start, $window_end, $is_home) 
  * $is_home: true to match if Salthill is home team, false if away team.
  */
 function parse_faiconnect_fixture($row, $is_home = true) {
-    // ENTERED matches have no date yet; postponed/played ones are not upcoming fixtures.
-    if (($row['matchStatus'] ?? '') !== 'SCHEDULED' || empty($row['matchDate'])) {
+    // Accept SCHEDULED and ENTERED. ENTERED matches have a date but no confirmed kick-off time yet.
+    // Skip POSTPONED, PLAYED, and other statuses.
+    $status = $row['matchStatus'] ?? '';
+    if (!in_array($status, ['SCHEDULED', 'ENTERED'], true) || empty($row['matchDate'])) {
         return null;
     }
 
