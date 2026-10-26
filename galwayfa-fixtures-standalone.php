@@ -248,14 +248,35 @@ function post_to_wordpress($html, $site_url, $username, $app_password, $page_id)
         exit(1);
     }
 
-    if ($http_code === 200 || $http_code === 201) {
-        echo "WordPress page updated successfully (HTTP {$http_code}).\n";
-    } else {
+    if ($http_code !== 200 && $http_code !== 201) {
         $body = json_decode($response, true);
         $message = $body['message'] ?? $response;
         echo "WordPress update failed (HTTP {$http_code}): {$message}\n";
         exit(1);
     }
+
+    verify_wordpress_saved($response, $html, $page_id, $http_code);
+    echo "WordPress post {$page_id} updated and verified (HTTP {$http_code}).\n";
+}
+
+/**
+ * A 200 alone is not proof of a save: confirm WordPress echoed back this post with our content.
+ */
+function verify_wordpress_saved($response, $html, $page_id, $http_code) {
+    $body = json_decode($response, true);
+    $saved = is_array($body) ? ($body['content']['raw'] ?? null) : null;
+    $normalise = function ($s) {
+        return trim(str_replace("\r\n", "\n", (string) $s));
+    };
+
+    if ($saved !== null && (int) ($body['id'] ?? 0) === (int) $page_id && $normalise($saved) === $normalise($html)) {
+        return;
+    }
+
+    echo "WordPress returned HTTP {$http_code} but the content was NOT saved as sent.\n";
+    echo 'Response id: ' . ($body['id'] ?? 'none') . ', saved length: ' . ($saved === null ? 'none' : strlen($saved)) . ', sent length: ' . strlen($html) . "\n";
+    echo 'Response start: ' . substr((string) $response, 0, 300) . "\n";
+    exit(1);
 }
 
 // Run the script
